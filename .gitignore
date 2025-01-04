@@ -9,7 +9,7 @@ __pycache__/
 # Virtual environment files
 church-bot/
 env/
-
+.env
 # IDE files
 .vscode/
 .pydevproject

@@ -117,6 +117,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     # Надсилання таблиці
 #     await update.message.reply_text(f"Ось розклад проповідей:\n\n```\n{table}\n```", parse_mode="Markdown")
 # Команда для формування таблиці
+# async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     schedule = load_schedule()
+
+#     if not schedule:
+#         await update.message.reply_text("Розклад порожній.")
+#         return
+
+#     # Отримання унікальних дат і сортування
+#     dates = sorted(set(schedule.keys()))
+
+#     # Формування заголовка таблиці
+#     header = "| Ім'я               | " + " | ".join(dates) + " |\n"
+#     header += "|--------------------|" + "|".join(["----------"] * len(dates)) + "|\n"
+
+#     # Формування рядків таблиці для кожного проповідника
+#     rows = []
+#     for preacher in PREACHERS:
+#         row = [preacher]  # Починаємо рядок із імені
+#         for date in dates:
+#             # Перевіряємо, чи проповідник має запис на цю дату
+#             if schedule.get(date) == preacher:
+#                 row.append("🟡")
+#             else:
+#                 row.append(" ")
+#         rows.append("| " + " | ".join(row) + " |")
+
+#     # Формуємо фінальну таблицю
+#     table = header + "\n".join(rows)
+
+#     # Надсилання таблиці
+#     await update.message.reply_text(f"Ось розклад проповідей:\n\n```\n{table}\n```", parse_mode="Markdown")
+# Мапа днів тижня
+DAYS_OF_WEEK = ["Понеділок", "Вівторок", "Середа", "Четвер", "П’ятниця", "Субота", "Неділя"]
+
+# Перевірка, чи стовпець містить лише жовті круги або порожні значення
+def is_column_compact(schedule, date, preachers):
+    for preacher in preachers:
+        if schedule.get(date) == preacher:
+            continue  # Жовтий круг
+        if schedule.get(date) is not None:
+            return False  # Якщо в стовпці є щось, крім жовтих кругів
+    return True
+
+# Команда для формування таблиці
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = load_schedule()
 
@@ -127,27 +171,39 @@ async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отримання унікальних дат і сортування
     dates = sorted(set(schedule.keys()))
 
-    # Формування заголовка таблиці
-    header = "| Ім'я               | " + " | ".join(dates) + " |\n"
-    header += "|--------------------|" + "|".join(["----------"] * len(dates)) + "|\n"
+    # Формування ширини стовпців
+    column_widths = {}
+    for date in dates:
+        if is_column_compact(schedule, date, PREACHERS):
+            column_widths[date] = 2  # Мінімальна ширина для стовпця з жовтими кругами
+        else:
+            column_widths[date] = 10  # Ширина для стандартних стовпців
+
+    # Формування заголовка таблиці з датами і днями тижня
+    header_dates = "| {:<17} | ".format("Ім'я") + " | ".join(f"{date:<{column_widths[date]}}" for date in dates) + " |\n"
+    header_days = "| {:<17} | ".format("День тижня") + " | ".join(
+        f"{DAYS_OF_WEEK[datetime.strptime(date, '%d.%m.%Y').weekday()]:<{column_widths[date]}}" for date in dates
+    ) + " |\n"
+    separator = "|-------------------|" + "|".join(["-" * (column_widths[date] + 2)] * len(dates)) + "|\n"
 
     # Формування рядків таблиці для кожного проповідника
     rows = []
     for preacher in PREACHERS:
-        row = [preacher]  # Починаємо рядок із імені
+        row = [f"{preacher:<17}"]  # Починаємо рядок із імені
         for date in dates:
-            # Перевіряємо, чи проповідник має запис на цю дату
             if schedule.get(date) == preacher:
-                row.append("🟡")
+                row.append(f"{'🟡':<{column_widths[date]}}")
             else:
-                row.append(" ")
+                row.append(f"{' ':<{column_widths[date]}}")
         rows.append("| " + " | ".join(row) + " |")
 
     # Формуємо фінальну таблицю
-    table = header + "\n".join(rows)
+    table = header_dates + header_days + separator + "\n".join(rows)
 
     # Надсилання таблиці
     await update.message.reply_text(f"Ось розклад проповідей:\n\n```\n{table}\n```", parse_mode="Markdown")
+
+
 def main():
     # Створення бота
     application = Application.builder().token(BOT_TOKEN).build()

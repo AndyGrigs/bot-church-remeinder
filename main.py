@@ -149,16 +149,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     # Надсилання таблиці
 #     await update.message.reply_text(f"Ось розклад проповідей:\n\n```\n{table}\n```", parse_mode="Markdown")
 # Мапа днів тижня
-DAYS_OF_WEEK = ["Понеділок", "Вівторок", "Середа", "Четвер", "П’ятниця", "Субота", "Неділя"]
+# Мапа скорочень днів тижня
+SHORT_DAYS_OF_WEEK = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
-# Перевірка, чи стовпець містить лише жовті круги або порожні значення
-def is_column_compact(schedule, date, preachers):
-    for preacher in preachers:
-        if schedule.get(date) == preacher:
-            continue  # Жовтий круг
-        if schedule.get(date) is not None:
-            return False  # Якщо в стовпці є щось, крім жовтих кругів
-    return True
+# Фіксована ширина для стовпців
+COLUMN_WIDTH = 5
 
 # Команда для формування таблиці
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,37 +166,29 @@ async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отримання унікальних дат і сортування
     dates = sorted(set(schedule.keys()))
 
-    # Формування ширини стовпців
-    column_widths = {}
-    for date in dates:
-        if is_column_compact(schedule, date, PREACHERS):
-            column_widths[date] = 2  # Мінімальна ширина для стовпця з жовтими кругами
-        else:
-            column_widths[date] = 10  # Ширина для стандартних стовпців
-
-    # Формування заголовка таблиці з датами і днями тижня
-    header_dates = "| {:<17} | ".format("Ім'я") + " | ".join(f"{date:<{column_widths[date]}}" for date in dates) + " |\n"
-    header_days = "| {:<17} | ".format("День тижня") + " | ".join(
-        f"{DAYS_OF_WEEK[datetime.strptime(date, '%d.%m.%Y').weekday()]:<{column_widths[date]}}" for date in dates
+    # Формування заголовка таблиці
+    header = f"| {'Ім\'я':<17} | " + " | ".join(f"{datetime.strptime(date, '%d.%m.%Y').strftime('%d.%m'):<{COLUMN_WIDTH}}" for date in dates) + " |\n"
+    separator = "|-------------------|" + "|".join(["-" * COLUMN_WIDTH] * len(dates)) + "|\n"
+    days_row = f"| {'День тижня':<17} | " + " | ".join(
+        f"{SHORT_DAYS_OF_WEEK[datetime.strptime(date, '%d.%m.%Y').weekday()]:<{COLUMN_WIDTH}}" for date in dates
     ) + " |\n"
-    separator = "|-------------------|" + "|".join(["-" * (column_widths[date] + 2)] * len(dates)) + "|\n"
 
     # Формування рядків таблиці для кожного проповідника
     rows = []
     for preacher in PREACHERS:
-        row = [f"{preacher:<17}"]  # Починаємо рядок із імені
+        row = [f"{preacher:<17}"]  # Ім'я проповідника
         for date in dates:
             if schedule.get(date) == preacher:
-                row.append(f"{'🟡':<{column_widths[date]}}")
+                row.append("🟡".center(COLUMN_WIDTH))  # Жовтий круг без пробілів
             else:
-                row.append(f"{' ':<{column_widths[date]}}")
+                row.append(" ".center(COLUMN_WIDTH))  # Порожня комірка
         rows.append("| " + " | ".join(row) + " |")
 
-    # Формуємо фінальну таблицю
-    table = header_dates + header_days + separator + "\n".join(rows)
+    # Формуємо повну таблицю
+    table = header + separator + days_row + separator + "\n".join(rows)
 
     # Надсилання таблиці
-    await update.message.reply_text(f"Ось розклад проповідей:\n\n```\n{table}\n```", parse_mode="Markdown")
+    await update.message.reply_text(f"```\n{table}\n```", parse_mode="Markdown")
 
 
 def main():

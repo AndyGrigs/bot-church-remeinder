@@ -2,10 +2,26 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 import os
+import json
 
 # Завантаження змінних із .env файлу
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+
+
+def load_schedule():
+    try:
+        with open("schedule.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+
+# Збереження розкладу у файл
+def save_schedule(schedule):
+    with open("schedule.json", "w", encoding="utf-8") as f:
+        json.dump(schedule, f, ensure_ascii=False, indent=4)
+
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):

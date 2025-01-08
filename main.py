@@ -3,11 +3,13 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from dotenv import load_dotenv
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
+import asyncio
 
 # Завантаження змінних із .env файлу
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
 
 user_states = {}
 
@@ -38,6 +40,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Не забудьте, що цього тижня у нас відбудеться церковний захід!")
+
+async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"Chat ID цієї групи: {chat_id}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда для показу списку команд"""
@@ -153,9 +159,67 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 SHORT_DAYS_OF_WEEK = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 # Фіксована ширина для стовпців
-COLUMN_WIDTH = 5
+# COLUMN_WIDTH = 5
 
-# Команда для формування таблиці
+# # Команда для формування таблиці
+# async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     schedule = load_schedule()
+
+#     if not schedule:
+#         await update.message.reply_text("Розклад порожній.")
+#         return
+
+#     # Отримання унікальних дат і сортування
+#     dates = sorted(set(schedule.keys()))
+
+#     # Формування заголовка таблиці
+#     header = f"| {'Ім\'я':<17} | " + " | ".join(f"{datetime.strptime(date, '%d.%m.%Y').strftime('%d.%m'):<{COLUMN_WIDTH}}" for date in dates) + " |\n"
+#     separator = "|-------------------|" + "|".join(["-" * COLUMN_WIDTH] * len(dates)) + "|\n"
+#     days_row = f"| {'День тижня':<17} | " + " | ".join(
+#         f"{SHORT_DAYS_OF_WEEK[datetime.strptime(date, '%d.%m.%Y').weekday()]:<{COLUMN_WIDTH}}" for date in dates
+#     ) + " |\n"
+
+#     # Формування рядків таблиці для кожного проповідника
+#     rows = []
+#     for preacher in PREACHERS:
+#         row = [f"{preacher:<17}"]  # Ім'я проповідника
+#         for date in dates:
+#             if schedule.get(date) == preacher:
+#                 row.append("🟡".center(COLUMN_WIDTH))  # Жовтий круг без пробілів
+#             else:
+#                 row.append(" ".center(COLUMN_WIDTH))  # Порожня комірка
+#         rows.append("| " + " | ".join(row) + " |")
+
+#     # Формуємо повну таблицю
+#     table = header + separator + days_row + separator + "\n".join(rows)
+
+#     # Надсилання таблиці
+#     await update.message.reply_text(f"```\n{table}\n```", parse_mode="Markdown")
+
+
+# Команда для нагадування
+async def reminder_task(application: Application):
+    while True:
+        schedule = load_schedule()
+        now = datetime.now()
+
+        for date, preacher in schedule.items():
+            event_time = datetime.strptime(date, "%d.%m.%Y")
+            reminder_time = event_time - timedelta(hours=36)
+
+            if now >= reminder_time and now < event_time:
+                # Надсилаємо нагадування
+                text = f"🔔 Нагадування!\n\n*{preacher}*, ви маєте проповідувати {date} ({SHORT_DAYS_OF_WEEK[event_time.weekday()]})."
+                for chat_id in user_states.keys():  # Перебір усіх користувачів
+                    try:
+                        await application.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+                    except Exception as e:
+                        print(f"Помилка при надсиланні повідомлення: {e}")
+
+        # Очікування 30 хвилин до наступної перевірки
+        await asyncio.sleep(1800)
+
+# Команда для виводу списку проповідників
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = load_schedule()
 
@@ -163,33 +227,14 @@ async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Розклад порожній.")
         return
 
-    # Отримання унікальних дат і сортування
-    dates = sorted(set(schedule.keys()))
+    # Формування списку
+    result = "*Розклад проповідей:*\n\n"
+    for date, preacher in schedule.items():
+        day_of_week = SHORT_DAYS_OF_WEEK[datetime.strptime(date, "%d.%m.%Y").weekday()]
+        result += f"- *{preacher}*: {date} ({day_of_week})\n"
 
-    # Формування заголовка таблиці
-    header = f"| {'Ім\'я':<17} | " + " | ".join(f"{datetime.strptime(date, '%d.%m.%Y').strftime('%d.%m'):<{COLUMN_WIDTH}}" for date in dates) + " |\n"
-    separator = "|-------------------|" + "|".join(["-" * COLUMN_WIDTH] * len(dates)) + "|\n"
-    days_row = f"| {'День тижня':<17} | " + " | ".join(
-        f"{SHORT_DAYS_OF_WEEK[datetime.strptime(date, '%d.%m.%Y').weekday()]:<{COLUMN_WIDTH}}" for date in dates
-    ) + " |\n"
-
-    # Формування рядків таблиці для кожного проповідника
-    rows = []
-    for preacher in PREACHERS:
-        row = [f"{preacher:<17}"]  # Ім'я проповідника
-        for date in dates:
-            if schedule.get(date) == preacher:
-                row.append("🟡".center(COLUMN_WIDTH))  # Жовтий круг без пробілів
-            else:
-                row.append(" ".center(COLUMN_WIDTH))  # Порожня комірка
-        rows.append("| " + " | ".join(row) + " |")
-
-    # Формуємо повну таблицю
-    table = header + separator + days_row + separator + "\n".join(rows)
-
-    # Надсилання таблиці
-    await update.message.reply_text(f"```\n{table}\n```", parse_mode="Markdown")
-
+    # Надсилання списку
+    await update.message.reply_text(result, parse_mode="Markdown")
 
 def main():
     # Створення бота
@@ -201,7 +246,12 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("add", add_command))
     application.add_handler(CommandHandler("end", end_command))
+    application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # Запуск функції нагадувань
+    # application.job_queue.run_once(lambda _: asyncio.create_task(reminder_task(application)), when=1)
+
 
     # Запуск бота
     application.run_polling()

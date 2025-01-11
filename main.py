@@ -45,8 +45,7 @@ PREACHERS = [
 SHORT_DAYS_OF_WEEK = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привіт! Я готовий працювати в групі.")
-    await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="Бот успішно активовано для групи!")
+    await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="Привіт! Я готовий працювати в групі.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     commands = """

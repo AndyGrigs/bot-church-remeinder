@@ -3,7 +3,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from dotenv import load_dotenv
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 # Завантаження змінних із .env файлу
 load_dotenv()
@@ -172,25 +172,49 @@ async def test_reminder(context: ContextTypes.DEFAULT_TYPE):
 #             await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
 #     return
 
+# async def remind(context: ContextTypes.DEFAULT_TYPE):
+#     schedule = load_schedule()
+#     current_time = datetime.now()
+#     current_day = current_time.weekday()
+#     current_hour = current_time.hour
+#     if (current_day == 2 and current_hour == 9) or (current_day == 5 and current_hour == 9):
+#         if current_day == 2:
+#             tomorrow = current_time.date() + timedelta(days=1)
+#             tomorrow_str = tomorrow.strftime("%d.%m.%Y")
+#             if tomorrow_str in schedule:
+#                 message = f"Завтра проповідує: {', '.join(schedule[tomorrow_str])}"
+#                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+#         elif current_day == 5:
+#             sunday = current_time.date() + timedelta(days=2)
+#             sunday_str = sunday.strftime("%d.%m.%Y")
+#             if sunday_str in schedule:
+#                 message = f"Неділя проповідує: {', '.join(schedule[sunday_str])}"
+#                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+#     return
+
 async def remind(context: ContextTypes.DEFAULT_TYPE):
-    schedule = load_schedule()
-    current_time = datetime.now()
-    current_day = current_time.weekday()
-    current_hour = current_time.hour
-    if (current_day == 2 and current_hour == 9) or (current_day == 5 and current_hour == 9):
-        if current_day == 2:
+    try:
+        schedule = load_schedule()
+        current_time = datetime.now()
+
+        # Середа - нагадування на четвер
+        if current_time.weekday() == 2:  # Середа
             tomorrow = current_time.date() + timedelta(days=1)
             tomorrow_str = tomorrow.strftime("%d.%m.%Y")
             if tomorrow_str in schedule:
-                message = f"Завтра проповідує: {', '.join(schedule[tomorrow_str])}"
+                message = f"🔔 Нагадування! Завтра проповідують: {', '.join(schedule[tomorrow_str])}."
                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-        elif current_day == 5:
+
+        # Субота - нагадування на неділю
+        elif current_time.weekday() == 5:  # Субота
             sunday = current_time.date() + timedelta(days=2)
             sunday_str = sunday.strftime("%d.%m.%Y")
             if sunday_str in schedule:
-                message = f"Неділя проповідує: {', '.join(schedule[sunday_str])}"
+                message = f"🔔 Нагадування! У неділю проповідують: {', '.join(schedule[sunday_str])}."
                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-    return
+
+    except Exception as e:
+        print(f"Помилка у функції remind: {e}")
 
 
 def main():
@@ -203,7 +227,11 @@ def main():
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
     
-    application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
+    # application.job_queue.run_daily(remind, time=time(datetime.now().hour, datetime.now().minute + 1), days=(datetime.now().weekday(),))
+    application.job_queue.run_daily(remind, time=time(9, 0), days=(2, 5))
+
+    # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
+    # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')
     # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, repeat_message))
   

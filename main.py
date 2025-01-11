@@ -54,9 +54,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - Почати спілкування з ботом
 /add - Додати нову проповідь
 /end - Показати розклад проповідей
-/get_chat_id - Дізнатися Chat ID групи
 """
     await update.message.reply_text(commands)
+
+
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введіть дату проповіді (DD.MM.YYYY):")
@@ -80,28 +81,6 @@ def save_schedule(new_entry):
 
     with open("schedule.json", "w", encoding="utf-8") as f:
         json.dump(schedule, f, ensure_ascii=False, indent=4)
-
-async def reminder_job(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        print("reminder_job викликано")
-        job_data = context.job.data
-        if not job_data:
-            print("Помилка: job_data = None")
-            return
-
-        chat_id = job_data.get("chat_id")
-        date = job_data.get("date")
-        preacher = job_data.get("preacher")
-
-        if not chat_id or not date or not preacher:
-            print(f"Неповні дані в job_data: {job_data}")
-            return
-
-        text = f"🔔 Нагадування!\n\nПроповідник: *{preacher}*.\nДата: {date}."
-        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
-        print("Нагадування успішно відправлено!")
-    except Exception as e:
-        print(f"Помилка у reminder_job: {e}")
 
 
 
@@ -135,16 +114,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             propov_idniki = ", ".join(schedule[date])
             await update.message.reply_text(f"Проповідь на {date} збережено. Проповідники: {propov_idniki}")
 
-            reminder_time = datetime.now() + timedelta(seconds=10)
-            print(f"Створено завдання для нагадування: {reminder_time}, дані: {GROUP_CHAT_ID}, {date}, {preacher}")
-
-            context.job_queue.run_once(
-                reminder_job,
-                when=reminder_time,
-                data={"chat_id": GROUP_CHAT_ID, "date": date, "preacher": preacher},
-                name=f"reminder_{date}_{preacher}"
-            )
-
+            
             del user_states[user_id]
 
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -176,6 +146,51 @@ async def test_reminder(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Помилка у test_reminder: {e}")
 
+# async def repeat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     """
+#     Repeat a message in a Telegram chat.
+
+#     Args:
+#         update (telegram.Update): Telegram update object
+#         context (telegram.ext.CallbackContext): Telegram context object
+#     """
+#     try:
+#         message = update.message.text
+#         chat_id = update.message.chat.id
+#         await context.bot.send_message(chat_id=chat_id, text=message)
+#     except Exception as e:
+#         print(f"Error repeating message: {e}")
+
+# async def remind(context: ContextTypes.DEFAULT_TYPE):
+#     schedule = load_schedule()
+#     current_time = datetime.now()
+#     for date, preachers in schedule.items():
+#         assigned_date = datetime.strptime(date, "%d.%m.%Y")
+#         reminder_time = assigned_date - timedelta(hours=36)
+#         if current_time >= reminder_time:
+#             message = f"🔔 Нагадування! Наступні проповідують: {', '.join(preachers)}"
+#             await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+#     return
+
+async def remind(context: ContextTypes.DEFAULT_TYPE):
+    schedule = load_schedule()
+    current_time = datetime.now()
+    current_day = current_time.weekday()
+    current_hour = current_time.hour
+    if (current_day == 2 and current_hour == 9) or (current_day == 5 and current_hour == 9):
+        if current_day == 2:
+            tomorrow = current_time.date() + timedelta(days=1)
+            tomorrow_str = tomorrow.strftime("%d.%m.%Y")
+            if tomorrow_str in schedule:
+                message = f"Завтра проповідує: {', '.join(schedule[tomorrow_str])}"
+                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+        elif current_day == 5:
+            sunday = current_time.date() + timedelta(days=2)
+            sunday_str = sunday.strftime("%d.%m.%Y")
+            if sunday_str in schedule:
+                message = f"Неділя проповідує: {', '.join(schedule[sunday_str])}"
+                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+    return
 
 
 def main():
@@ -187,11 +202,11 @@ def main():
     application.add_handler(CommandHandler("end", end_command))
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
-
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-     # Запуск тестового нагадування через 10 секунд
-    application.job_queue.run_once(test_reminder, when=datetime.now() + timedelta(seconds=10))
-
+    
+    application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
+    # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')
+    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, repeat_message))
+  
     application.run_polling()
 
 if __name__ == "__main__":

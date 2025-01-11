@@ -228,8 +228,8 @@ def main():
     application.add_error_handler(error_handler)
     
     # application.job_queue.run_daily(remind, time=time(datetime.now().hour, datetime.now().minute + 1), days=(datetime.now().weekday(),))
-    application.job_queue.run_daily(remind, time=time(9, 0), days=(2, 5))
-
+    # application.job_queue.run_daily(remind, time=time(9, 0), days=(2, 5))
+    application.job_queue.run_repeating(remind, interval=10, name='remind_job')
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')

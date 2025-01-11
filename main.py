@@ -192,6 +192,7 @@ async def test_reminder(context: ContextTypes.DEFAULT_TYPE):
 #     return
 
 async def remind(context: ContextTypes.DEFAULT_TYPE):
+    print()
     try:
         schedule = load_schedule()
         current_time = datetime.now()

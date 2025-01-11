@@ -1,16 +1,20 @@
+import calendar
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from dotenv import load_dotenv
 import os
-import json
 from datetime import datetime, timedelta, time
+from pymongo import MongoClient
+from bson.objectid import ObjectId
+
 
 # Завантаження змінних із .env файлу
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
+MONGO_URI = os.getenv('MONGO_URI') 
 
-if not BOT_TOKEN or not GROUP_CHAT_ID:
+if not BOT_TOKEN or not GROUP_CHAT_ID or not MONGO_URI:
     print("Помилка: BOT_TOKEN або GROUP_CHAT_ID не встановлено. Перевірте файл .env.")
     exit(1)
 
@@ -22,15 +26,45 @@ except ValueError:
 
 user_states = {}
 
+
+# client = MongoClient(MONGO_URI, ssl=True, ssl_cert_reqs=ssl.CERT_NONE)
+# client = MongoClient(MONGO_URI, ssl_cert_reqs=ssl.CERT_NONE)
+client = MongoClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
+db = client["church_schedule"]  # Назва бази даних
+collection = db["schedules"]  # Колекція для розкладів
+
 def load_schedule():
-    """
-    Завантаження існуючого розкладу з JSON-файлу.
-    """
+    """Завантаження розкладу з MongoDB."""
     try:
-        with open("schedule.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        documents = collection.find({})
+        schedule = {}
+        for doc in documents:
+            date = doc["date"]
+            preachers = doc["preachers"]
+            schedule[date] = preachers
+        return schedule
+    except Exception as e:
+        print(f"Помилка при завантаженні розкладу: {e}")
         return {}
+
+def save_schedule(new_entry):
+    """Додавання нового запису до MongoDB."""
+    try:
+        for date, preacher in new_entry.items():
+            existing_entry = collection.find_one({"date": date})
+            if existing_entry:
+                # Додаємо нового проповідника, якщо його ще немає
+                if preacher not in existing_entry["preachers"]:
+                    collection.update_one(
+                        {"date": date},
+                        {"$push": {"preachers": preacher}}
+                    )
+            else:
+                # Створюємо новий запис
+                collection.insert_one({"date": date, "preachers": [preacher]})
+    except Exception as e:
+        print(f"Помилка при збереженні розкладу: {e}")
+
 
 # Список проповідників
 PREACHERS = [
@@ -58,63 +92,165 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
+# async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     await update.message.reply_text("Введіть дату проповіді (DD.MM.YYYY):")
+#     user_states[update.effective_user.id] = "waiting_for_date"
+
+def get_thursday_sunday_dates(year: int, month: int):
+    """
+    Повертає список дат (у форматі DD.MM.YYYY) для четвергів і неділь 
+    у вказаному році та місяці.
+    """
+    # Дізнаємося, скільки днів у місяці
+    _, days_in_month = calendar.monthrange(year, month)
+
+    # Створюємо список усіх дат місяця
+    all_dates = [
+        datetime(year, month, day)
+        for day in range(1, days_in_month + 1)
+    ]
+
+    # Потрібні лише четвер (weekday() = 3) та неділя (weekday() = 6)
+    # (Пн=0, Вт=1, Ср=2, Чт=3, Пт=4, Сб=5, Нд=6)
+    selected_dates = [
+        d.strftime("%d.%m.%Y")
+        for d in all_dates
+        if d.weekday() in (3, 6)  # четвер і неділя
+    ]
+
+    return selected_dates
+
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введіть дату проповіді (DD.MM.YYYY):")
+    # Визначаємо поточний рік і місяць
+    now = datetime.now()
+    current_year = now.year
+    current_month = now.month
+
+    # Дати четвергів і неділь для поточного місяця
+    current_month_dates = get_thursday_sunday_dates(current_year, current_month)
+
+    # Визначаємо наступний місяць
+    if current_month == 12:
+        next_year = current_year + 1
+        next_month = 1
+    else:
+        next_year = current_year
+        next_month = current_month + 1
+
+    # Дати четвергів і неділь для наступного місяця
+    next_month_dates = get_thursday_sunday_dates(next_year, next_month)
+
+    # Об'єднуємо дати обох місяців (можна залишити окремо, але зручніше одним списком)
+    all_dates = current_month_dates + next_month_dates
+
+    if not all_dates:
+        await update.message.reply_text(
+            "Немає доступних четвергів чи неділь у поточному або наступному місяці."
+        )
+        return
+
+    # Готуємо клавіатуру з датами
+    keyboard = [[KeyboardButton(date_str)] for date_str in all_dates]
+
+    # Записуємо стан користувача
     user_states[update.effective_user.id] = "waiting_for_date"
 
-def save_schedule(new_entry):
-    """
-    Додає новий запис до JSON-файлу, підтримуючи кілька проповідників на одну дату.
-    """
-    schedule = load_schedule()
-    for date, preacher in new_entry.items():
-        if date in schedule:
-            if isinstance(schedule[date], list):
-                if preacher not in schedule[date]:
-                    schedule[date].append(preacher)
-            else:
-                if schedule[date] != preacher:
-                    schedule[date] = [schedule[date], preacher]
-        else:
-            schedule[date] = [preacher]
-
-    with open("schedule.json", "w", encoding="utf-8") as f:
-        json.dump(schedule, f, ensure_ascii=False, indent=4)
+    # Виводимо повідомлення з вибором дати
+    await update.message.reply_text(
+        "Оберіть дату проповіді (лише четвер або неділя):",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard,
+            one_time_keyboard=True,
+            resize_keyboard=True
+        ),
+    )
 
 
+# async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     user_id = update.effective_user.id
 
+#     if user_id in user_states:
+#         state = user_states[user_id]
+
+#         if state == "waiting_for_date":
+#             date = update.message.text
+#             try:
+#                 parsed_date = datetime.strptime(date, "%d.%m.%Y")
+#                 formatted_date = parsed_date.strftime("%d.%m.%Y")
+
+#                 user_states[user_id] = {"state": "waiting_for_preacher", "date": formatted_date}
+#                 keyboard = [[KeyboardButton(name)] for name in PREACHERS]
+#                 reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+#                 await update.message.reply_text("Оберіть проповідника:", reply_markup=reply_markup)
+#             except ValueError:
+#                 await update.message.reply_text("Неправильний формат дати. Введіть дату у форматі DD.MM.YYYY:")
+
+#         elif state.get("state") == "waiting_for_preacher":
+#             preacher = update.message.text
+#             date = state["date"]
+
+#             new_entry = {date: preacher}
+#             save_schedule(new_entry)
+
+#             schedule = load_schedule()
+#             propov_idniki = ", ".join(schedule[date])
+#             await update.message.reply_text(f"Проповідь на {date} збережено. Проповідники: {propov_idniki}")
+
+            
+#             del user_states[user_id]
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
+    # Перевіряємо, чи є користувач у user_states
     if user_id in user_states:
         state = user_states[user_id]
 
+        # ---------------------------------------------------------------------
+        # Якщо користувач щойно обрав дату
+        # ---------------------------------------------------------------------
         if state == "waiting_for_date":
-            date = update.message.text
-            try:
-                parsed_date = datetime.strptime(date, "%d.%m.%Y")
-                formatted_date = parsed_date.strftime("%d.%m.%Y")
+            # Записуємо обрану дату
+            selected_date = update.message.text.strip()
 
-                user_states[user_id] = {"state": "waiting_for_preacher", "date": formatted_date}
-                keyboard = [[KeyboardButton(name)] for name in PREACHERS]
-                reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-                await update.message.reply_text("Оберіть проповідника:", reply_markup=reply_markup)
-            except ValueError:
-                await update.message.reply_text("Неправильний формат дати. Введіть дату у форматі DD.MM.YYYY:")
+            # Тепер ми чекаємо вибір проповідника
+            user_states[user_id] = {
+                "state": "waiting_for_preacher",
+                "date": selected_date
+            }
 
-        elif state.get("state") == "waiting_for_preacher":
-            preacher = update.message.text
+            # Формуємо клавіатуру з прізвищами проповідників
+            keyboard = [[KeyboardButton(name)] for name in PREACHERS]
+
+            await update.message.reply_text(
+                "Оберіть проповідника:",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard,
+                    one_time_keyboard=True,
+                    resize_keyboard=True
+                ),
+            )
+
+        # ---------------------------------------------------------------------
+        # Якщо користувач обрав проповідника
+        # ---------------------------------------------------------------------
+        elif isinstance(state, dict) and state.get("state") == "waiting_for_preacher":
+            preacher = update.message.text.strip()
             date = state["date"]
 
+            # Зберігаємо запис у базі
             new_entry = {date: preacher}
             save_schedule(new_entry)
 
             schedule = load_schedule()
-            propov_idniki = ", ".join(schedule[date])
-            await update.message.reply_text(f"Проповідь на {date} збережено. Проповідники: {propov_idniki}")
+            propovidnyky = ", ".join(schedule[date])
+            await update.message.reply_text(
+                f"Проповідь на {date} збережено. Проповідники: {propovidnyky}"
+            )
 
-            
+            # Очищаємо стан користувача
             del user_states[user_id]
+
+
 
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = load_schedule()
@@ -137,62 +273,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     print(f"Помилка: {context.error}")
 
 
-async def test_reminder(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        print("Викликається test_reminder")
-        await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="Тестове нагадування працює!", parse_mode="Markdown")
-        print("Тестове нагадування успішно відправлено!")
-    except Exception as e:
-        print(f"Помилка у test_reminder: {e}")
 
-# async def repeat_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     """
-#     Repeat a message in a Telegram chat.
-
-#     Args:
-#         update (telegram.Update): Telegram update object
-#         context (telegram.ext.CallbackContext): Telegram context object
-#     """
-#     try:
-#         message = update.message.text
-#         chat_id = update.message.chat.id
-#         await context.bot.send_message(chat_id=chat_id, text=message)
-#     except Exception as e:
-#         print(f"Error repeating message: {e}")
-
-# async def remind(context: ContextTypes.DEFAULT_TYPE):
-#     schedule = load_schedule()
-#     current_time = datetime.now()
-#     for date, preachers in schedule.items():
-#         assigned_date = datetime.strptime(date, "%d.%m.%Y")
-#         reminder_time = assigned_date - timedelta(hours=36)
-#         if current_time >= reminder_time:
-#             message = f"🔔 Нагадування! Наступні проповідують: {', '.join(preachers)}"
-#             await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-#     return
-
-# async def remind(context: ContextTypes.DEFAULT_TYPE):
-#     schedule = load_schedule()
-#     current_time = datetime.now()
-#     current_day = current_time.weekday()
-#     current_hour = current_time.hour
-#     if (current_day == 2 and current_hour == 9) or (current_day == 5 and current_hour == 9):
-#         if current_day == 2:
-#             tomorrow = current_time.date() + timedelta(days=1)
-#             tomorrow_str = tomorrow.strftime("%d.%m.%Y")
-#             if tomorrow_str in schedule:
-#                 message = f"Завтра проповідує: {', '.join(schedule[tomorrow_str])}"
-#                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-#         elif current_day == 5:
-#             sunday = current_time.date() + timedelta(days=2)
-#             sunday_str = sunday.strftime("%d.%m.%Y")
-#             if sunday_str in schedule:
-#                 message = f"Неділя проповідує: {', '.join(schedule[sunday_str])}"
-#                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
-#     return
 
 async def remind(context: ContextTypes.DEFAULT_TYPE):
-    print()
     try:
         schedule = load_schedule()
         current_time = datetime.now()
@@ -233,7 +316,8 @@ def main():
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')
-    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, repeat_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
   
     application.run_polling()
 

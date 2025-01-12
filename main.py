@@ -3,9 +3,10 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from dotenv import load_dotenv
 import os
-from datetime import datetime, timedelta, time
+from datetime import datetime, time
+
 from pymongo import MongoClient
-from bson.objectid import ObjectId
+
 
 
 # Завантаження змінних із .env файлу
@@ -86,7 +87,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Доступні команди:
 /start - Почати спілкування з ботом
 /add - Додати нову проповідь
-/end - Показати розклад проповідей
+/show - Показати розклад проповідей
 """
     await update.message.reply_text(commands)
 
@@ -261,7 +262,7 @@ async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = "*Розклад проповідей:*\n\n"
     for date, preacher in sorted(schedule.items()):
         day_of_week = SHORT_DAYS_OF_WEEK[datetime.strptime(date, "%d.%m.%Y").weekday()]
-        result += f"- {date} ({day_of_week}): {preacher}\n"
+        result += f"📆 {date} ({day_of_week}) Проповідники 🗣 {preacher}\n"
 
     await update.message.reply_text(result, parse_mode="Markdown")
 
@@ -303,11 +304,16 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("add", add_command))
-    application.add_handler(CommandHandler("end", end_command))
+    application.add_handler(CommandHandler("show", end_command))
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
     
-    application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
+    application.job_queue.run_daily(
+        remind,
+        time=time(hour=9, minute=0),
+        days=(0,1,2,3,4,5,6)  # 0 - Пн, 6 - Нд, тобто щодня
+    )
+    # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_daily(remind, time=time(datetime.now().hour, datetime.now().minute + 1), days=(datetime.now().weekday(),))
     # application.job_queue.run_daily(remind, time=time(9, 0), days=(2, 5))
     # application.job_queue.run_repeating(remind, interval=10, name='remind_job')

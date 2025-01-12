@@ -278,22 +278,19 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 async def remind(context: ContextTypes.DEFAULT_TYPE):
     try:
         schedule = load_schedule()
-        current_time = datetime.now()
+        current_date = datetime.now().date()
 
-        # Середа - нагадування на четвер
-        if current_time.weekday() == 2:  # Середа
-            tomorrow = current_time.date() + timedelta(days=1)
-            tomorrow_str = tomorrow.strftime("%d.%m.%Y")
-            if tomorrow_str in schedule:
-                message = f"🔔 Нагадування! Завтра проповідують: {', '.join(schedule[tomorrow_str])}."
-                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+        for date, preachers in schedule.items():
+            schedule_date = datetime.strptime(date, "%d.%m.%Y")
+            difference = (schedule_date - current_date).days
 
-        # Субота - нагадування на неділю
-        elif current_time.weekday() == 5:  # Субота
-            sunday = current_time.date() + timedelta(days=2)
-            sunday_str = sunday.strftime("%d.%m.%Y")
-            if sunday_str in schedule:
-                message = f"🔔 Нагадування! У неділю проповідують: {', '.join(schedule[sunday_str])}."
+            if difference == 2:
+                preachers_list = ", ".join(preachers)
+                message = (
+                    f"Нагадування!\n\n"
+                    f"На зібранні{date}:\n"
+                    f"Проповідують:{preachers_list}"
+                )
                 await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
 
     except Exception as e:
@@ -310,9 +307,10 @@ def main():
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
     
+    application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_daily(remind, time=time(datetime.now().hour, datetime.now().minute + 1), days=(datetime.now().weekday(),))
     # application.job_queue.run_daily(remind, time=time(9, 0), days=(2, 5))
-    application.job_queue.run_repeating(remind, interval=10, name='remind_job')
+    # application.job_queue.run_repeating(remind, interval=10, name='remind_job')
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')

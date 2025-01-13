@@ -4,9 +4,11 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from dotenv import load_dotenv
 import os
 from datetime import datetime, time
-
+import docx  # python-docx
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches
 from pymongo import MongoClient
-
 
 
 # Завантаження змінних із .env файлу
@@ -33,6 +35,18 @@ user_states = {}
 client = MongoClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
 db = client["church_schedule"]  # Назва бази даних
 collection = db["schedules"]  # Колекція для розкладів
+
+# Функція для встановлення кольору фону (заливки) клітинки:
+def set_cell_bg_color(cell, color_hex: str):
+    """
+    Заливка клітинки таблиці коліром у форматі HEX (без #), наприклад "FF0000" (червоний).
+    """
+    # Отримуємо безпосередньо <w:tc> XML-елемент
+    tc_pr = cell._tc.get_or_add_tcPr()
+    # Створюємо <w:shd w:fill="COLOR_HEX"/>
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:fill'), color_hex)
+    tc_pr.append(shd)
 
 def load_schedule():
     """Завантаження розкладу з MongoDB."""
@@ -66,6 +80,154 @@ def save_schedule(new_entry):
     except Exception as e:
         print(f"Помилка при збереженні розкладу: {e}")
 
+async def export_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Команда /export_table [current|next]
+    Створює Word-документ з таблицею проповідників тільки за обраний місяць:
+    - /export_table current => поточний місяць
+    - /export_table next    => наступний місяць
+    Якщо не передано аргумент, використовується поточний місяць.
+    """
+    # Зчитуємо аргументи: /export_table current або /export_table next
+    user_input = update.message.text.strip().split()
+    chosen_option = None
+    if len(user_input) > 1:
+        chosen_option = user_input[1].lower()  # "current" або "next"
+
+    # Визначаємо, який місяць фільтрувати
+    now = datetime.now()
+    this_year = now.year
+    this_month = now.month
+
+    if chosen_option == "next":
+        # Наступний місяць
+        if this_month == 12:
+            filter_year = this_year + 1
+            filter_month = 1
+        else:
+            filter_year = this_year
+            filter_month = this_month + 1
+    else:
+        # За замовчуванням - поточний місяць
+        filter_year = this_year
+        filter_month = this_month
+
+    # -------------------------------------------------
+    # 1) Завантажуємо розклад з БД
+    # -------------------------------------------------
+    schedule = load_schedule()  
+    if not schedule:
+        await update.message.reply_text("Розклад порожній, немає що експортувати.")
+        return
+
+    # Усі дати, відсортовані
+    all_dates_str = sorted(schedule.keys(), key=lambda d: datetime.strptime(d, "%d.%m.%Y"))
+    if not all_dates_str:
+        await update.message.reply_text("Немає дат у розкладі.")
+        return
+
+    # -------------------------------------------------
+    # 2) Фільтруємо лише ті дати, які припадають на обраний місяць/рік
+    # -------------------------------------------------
+    filtered_dates = []
+    for date_str in all_dates_str:
+        dt = datetime.strptime(date_str, "%d.%m.%Y")
+        if dt.year == filter_year and dt.month == filter_month:
+            filtered_dates.append(date_str)
+
+    if not filtered_dates:
+        # Якщо немає дат за обраний місяць
+        month_name = f"{filter_month:02d}.{filter_year}"
+        await update.message.reply_text(
+            f"Немає жодної дати для місяця {month_name} у розкладі."
+        )
+        return
+
+    # -------------------------------------------------
+    # 3) Cписок проповідників (може бути ваш PREACHERS = [...])
+    # -------------------------------------------------
+    preachers = [
+        "Босько П.", "Біленко Ю.", "Мосійчук В.", "Мироненко І.",
+        "Барановський М.", "Пономарьов А.", "Замуруєв В.", "Григоров А.",
+        "Савостін В.", "Козак Є.", "Кулик Є.", "Ковальчук Ю.",
+        "Савостін І.", "Суржа П.", "Кітченко Я.", "Волос В.",
+        "Сардак Р."
+    ]
+
+    # -------------------------------------------------
+    # 4) Створюємо документ Word
+    # -------------------------------------------------
+    doc = docx.Document()
+
+    # Щоб у підписі було зрозуміло, за який місяць генеруємо
+    doc.add_heading(
+        f"Розклад проповідей за {filter_month:02d}.{filter_year}",
+        level=1
+    )
+
+    # Кількість рядків: 1 (шапка з датами) + кількість проповідників
+    # Кількість колонок: 1 (список проповідників) + кількість дат
+    rows_count = 1 + len(preachers)
+    cols_count = 1 + len(filtered_dates)
+
+    table = doc.add_table(rows=rows_count, cols=cols_count)
+    table.style = "Table Grid"
+
+    # -------------------------------------------------
+    # 4.1) Заповнюємо верхній рядок (дата + день тижня)
+    # -------------------------------------------------
+    table.cell(0, 0).text = "Проповідники"
+
+    short_days = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
+    for col_idx, date_str in enumerate(filtered_dates, start=1):
+        dt = datetime.strptime(date_str, "%d.%m.%Y")
+        weekday_num = dt.weekday()  # 0=Пн ... 6=Нд
+        day_of_week_str = short_days[weekday_num]
+        cell = table.cell(0, col_idx)
+        cell.text = f"{date_str}\n({day_of_week_str})"
+
+    # -------------------------------------------------
+    # 4.2) Заповнюємо перший стовпець проповідниками
+    # -------------------------------------------------
+    for row_idx, preacher in enumerate(preachers, start=1):
+        table.cell(row_idx, 0).text = preacher
+
+    # -------------------------------------------------
+    # 4.3) Фарбуємо клітинки, якщо проповідник записаний на дату
+    # -------------------------------------------------
+    for col_idx, date_str in enumerate(filtered_dates, start=1):
+        dt = datetime.strptime(date_str, "%d.%m.%Y")
+        weekday_num = dt.weekday()
+
+        for row_idx, preacher in enumerate(preachers, start=1):
+            if date_str in schedule and preacher in schedule[date_str]:
+                cell = table.cell(row_idx, col_idx)
+                if weekday_num == 3:
+                    # четвер => жовтий
+                    set_cell_bg_color(cell, "FFFF00")
+                elif weekday_num == 6:
+                    # неділя => червоний
+                    set_cell_bg_color(cell, "FF0000")
+                else:
+                    # Інші дні тижня — сірий (на бажання)
+                    set_cell_bg_color(cell, "DDDDDD")
+
+    # -------------------------------------------------
+    # 5) Зберігаємо та надсилаємо файл
+    # -------------------------------------------------
+    filename = "графік.docx"
+    doc.save(filename)
+
+    with open(filename, "rb") as f:
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=f,
+            filename=filename,
+            caption=(
+                f"Таблиця з розкладом проповідей за {filter_month:02d}.{filter_year}. "
+                "Жовтий - четвер, червоний - неділя."
+            )
+        )
 
 # Список проповідників
 PREACHERS = [
@@ -88,11 +250,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - Почати спілкування з ботом
 /add - Додати нову проповідь
 /show - Показати розклад проповідей
+/export - Експортувати розклад в файл
 /delete - Видалити проповідь
 /help - Показати список доступних команд
 """
     await update.message.reply_text(commands)
-
 
 def get_thursday_sunday_dates(year: int, month: int):
     """
@@ -163,59 +325,6 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ),
     )
 
-# async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     user_id = update.effective_user.id
-
-#     # Перевіряємо, чи є користувач у user_states
-#     if user_id in user_states:
-#         state = user_states[user_id]
-
-#         # ---------------------------------------------------------------------
-#         # Якщо користувач щойно обрав дату
-#         # ---------------------------------------------------------------------
-#         if state == "waiting_for_date":
-#             # Записуємо обрану дату
-#             selected_date = update.message.text.strip()
-
-#             # Тепер ми чекаємо вибір проповідника
-#             user_states[user_id] = {
-#                 "state": "waiting_for_preacher",
-#                 "date": selected_date
-#             }
-
-#             # Формуємо клавіатуру з прізвищами проповідників
-#             keyboard = [[KeyboardButton(name)] for name in PREACHERS]
-
-#             await update.message.reply_text(
-#                 "Оберіть проповідника:",
-#                 reply_markup=ReplyKeyboardMarkup(
-#                     keyboard,
-#                     one_time_keyboard=True,
-#                     resize_keyboard=True
-#                 ),
-#             )
-
-#         # ---------------------------------------------------------------------
-#         # Якщо користувач обрав проповідника
-#         # ---------------------------------------------------------------------
-#         elif isinstance(state, dict) and state.get("state") == "waiting_for_preacher":
-#             preacher = update.message.text.strip()
-#             date = state["date"]
-
-#             # Зберігаємо запис у базі
-#             new_entry = {date: preacher}
-#             save_schedule(new_entry)
-
-#             schedule = load_schedule()
-#             propovidnyky = ", ".join(schedule[date])
-#             await update.message.reply_text(
-#                 f"Проповідь на {date} збережено. Проповідники: {propovidnyky}"
-#             )
-
-#             # Очищаємо стан користувача
-#             del user_states[user_id]
-
-
 def delete_schedule_date(date_str: str) -> bool:
     """
     Видаляє цілу дату (з усіма проповідниками) з колекції.
@@ -251,8 +360,6 @@ def delete_schedule_preacher(date_str: str, preacher: str) -> bool:
 
     return True
 
-
-
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = load_schedule()  # отримуєте актуальний розклад із БД
     if not schedule:
@@ -272,8 +379,6 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Оберіть дату, яку хочете видалити (цілком або окремих проповідників):",
         reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
     )
-
-
 
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     schedule = load_schedule()
@@ -451,8 +556,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             del user_states[user_id]
 
-
-
 async def remind(context: ContextTypes.DEFAULT_TYPE):
     try:
         schedule = load_schedule()
@@ -473,7 +576,6 @@ async def remind(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Помилка у функції remind: {e}")
-
 
 # Обробник невідомої команди
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -496,15 +598,10 @@ def main():
     application.job_queue.run_daily(
         remind,
         time=time(hour=9, minute=0),
-        days=(0,1,2,3,4,5,6)  # 0 - Пн, 6 - Нд, тобто щодня
+        days=(0,1,2,3,4,5,6)  
     )
-    # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
-    # application.job_queue.run_daily(remind, time=time(datetime.now().hour, datetime.now().minute + 1), days=(datetime.now().weekday(),))
-    # application.job_queue.run_daily(remind, time=time(9, 0), days=(2, 5))
-    # application.job_queue.run_repeating(remind, interval=10, name='remind_job')
-    # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
-    # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
-    # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')
+    application.add_handler(CommandHandler("export", export_table_command))
+
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
   

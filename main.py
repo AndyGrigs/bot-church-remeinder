@@ -298,6 +298,12 @@ async def remind(context: ContextTypes.DEFAULT_TYPE):
         print(f"Помилка у функції remind: {e}")
 
 
+# Обробник невідомої команди
+async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Невідома команда. Використайте /help, щоб переглянути список доступних команд."
+    )
+
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -321,7 +327,7 @@ def main():
     # application.job_queue.run_daily(remind, time=datetime.time(9, 0), days=(2, 5))
     # application.job_queue.run_repeating(remind, interval=3600, name='remind_job')
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
+    application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
   
     application.run_polling()
 

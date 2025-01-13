@@ -88,14 +88,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - Почати спілкування з ботом
 /add - Додати нову проповідь
 /show - Показати розклад проповідей
+/delete - Видалити проповідь
+/help - Показати список доступних команд
 """
     await update.message.reply_text(commands)
 
-
-
-# async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     await update.message.reply_text("Введіть дату проповіді (DD.MM.YYYY):")
-#     user_states[update.effective_user.id] = "waiting_for_date"
 
 def get_thursday_sunday_dates(year: int, month: int):
     """
@@ -166,90 +163,115 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ),
     )
 
-
 # async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     user_id = update.effective_user.id
 
+#     # Перевіряємо, чи є користувач у user_states
 #     if user_id in user_states:
 #         state = user_states[user_id]
 
+#         # ---------------------------------------------------------------------
+#         # Якщо користувач щойно обрав дату
+#         # ---------------------------------------------------------------------
 #         if state == "waiting_for_date":
-#             date = update.message.text
-#             try:
-#                 parsed_date = datetime.strptime(date, "%d.%m.%Y")
-#                 formatted_date = parsed_date.strftime("%d.%m.%Y")
+#             # Записуємо обрану дату
+#             selected_date = update.message.text.strip()
 
-#                 user_states[user_id] = {"state": "waiting_for_preacher", "date": formatted_date}
-#                 keyboard = [[KeyboardButton(name)] for name in PREACHERS]
-#                 reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-#                 await update.message.reply_text("Оберіть проповідника:", reply_markup=reply_markup)
-#             except ValueError:
-#                 await update.message.reply_text("Неправильний формат дати. Введіть дату у форматі DD.MM.YYYY:")
+#             # Тепер ми чекаємо вибір проповідника
+#             user_states[user_id] = {
+#                 "state": "waiting_for_preacher",
+#                 "date": selected_date
+#             }
 
-#         elif state.get("state") == "waiting_for_preacher":
-#             preacher = update.message.text
+#             # Формуємо клавіатуру з прізвищами проповідників
+#             keyboard = [[KeyboardButton(name)] for name in PREACHERS]
+
+#             await update.message.reply_text(
+#                 "Оберіть проповідника:",
+#                 reply_markup=ReplyKeyboardMarkup(
+#                     keyboard,
+#                     one_time_keyboard=True,
+#                     resize_keyboard=True
+#                 ),
+#             )
+
+#         # ---------------------------------------------------------------------
+#         # Якщо користувач обрав проповідника
+#         # ---------------------------------------------------------------------
+#         elif isinstance(state, dict) and state.get("state") == "waiting_for_preacher":
+#             preacher = update.message.text.strip()
 #             date = state["date"]
 
+#             # Зберігаємо запис у базі
 #             new_entry = {date: preacher}
 #             save_schedule(new_entry)
 
 #             schedule = load_schedule()
-#             propov_idniki = ", ".join(schedule[date])
-#             await update.message.reply_text(f"Проповідь на {date} збережено. Проповідники: {propov_idniki}")
+#             propovidnyky = ", ".join(schedule[date])
+#             await update.message.reply_text(
+#                 f"Проповідь на {date} збережено. Проповідники: {propovidnyky}"
+#             )
 
-            
+#             # Очищаємо стан користувача
 #             del user_states[user_id]
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
 
-    # Перевіряємо, чи є користувач у user_states
-    if user_id in user_states:
-        state = user_states[user_id]
 
-        # ---------------------------------------------------------------------
-        # Якщо користувач щойно обрав дату
-        # ---------------------------------------------------------------------
-        if state == "waiting_for_date":
-            # Записуємо обрану дату
-            selected_date = update.message.text.strip()
+def delete_schedule_date(date_str: str) -> bool:
+    """
+    Видаляє цілу дату (з усіма проповідниками) з колекції.
+    Повертає True, якщо дата була знайдена і видалена; False, якщо дати не було.
+    """
+    result = collection.delete_one({"date": date_str})
+    return result.deleted_count > 0
 
-            # Тепер ми чекаємо вибір проповідника
-            user_states[user_id] = {
-                "state": "waiting_for_preacher",
-                "date": selected_date
-            }
+def delete_schedule_preacher(date_str: str, preacher: str) -> bool:
+    """
+    Видаляє вказаного проповідника з масиву preachers на конкретну дату.
+    Якщо після видалення у дати не лишається проповідників — видаляє увесь запис дати.
+    Повертає True, якщо щось видалено; False, якщо даної дати або проповідника не знайдено.
+    """
+    doc = collection.find_one({"date": date_str})
+    if not doc:
+        return False  # Немає такої дати
 
-            # Формуємо клавіатуру з прізвищами проповідників
-            keyboard = [[KeyboardButton(name)] for name in PREACHERS]
+    if preacher not in doc["preachers"]:
+        return False  # Проповідника в списку немає
 
-            await update.message.reply_text(
-                "Оберіть проповідника:",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard,
-                    one_time_keyboard=True,
-                    resize_keyboard=True
-                ),
-            )
+    # Видаляємо проповідника зі списку
+    collection.update_one(
+        {"date": date_str},
+        {"$pull": {"preachers": preacher}}
+    )
 
-        # ---------------------------------------------------------------------
-        # Якщо користувач обрав проповідника
-        # ---------------------------------------------------------------------
-        elif isinstance(state, dict) and state.get("state") == "waiting_for_preacher":
-            preacher = update.message.text.strip()
-            date = state["date"]
+    # Перевіряємо, чи залишилися проповідники
+    updated_doc = collection.find_one({"date": date_str})
+    if updated_doc and not updated_doc["preachers"]:
+        # Якщо проповідників більше не лишилося — видаляємо дату
+        collection.delete_one({"_id": updated_doc["_id"]})
 
-            # Зберігаємо запис у базі
-            new_entry = {date: preacher}
-            save_schedule(new_entry)
+    return True
 
-            schedule = load_schedule()
-            propovidnyky = ", ".join(schedule[date])
-            await update.message.reply_text(
-                f"Проповідь на {date} збережено. Проповідники: {propovidnyky}"
-            )
 
-            # Очищаємо стан користувача
-            del user_states[user_id]
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    schedule = load_schedule()  # отримуєте актуальний розклад із БД
+    if not schedule:
+        await update.message.reply_text("Немає жодних дат у розкладі для видалення.")
+        return
+
+    # Отримуємо усі дати, що є в розкладі
+    all_dates = sorted(schedule.keys())
+
+    # Формуємо клавіатуру з дат
+    keyboard = [[KeyboardButton(date_str)] for date_str in all_dates]
+
+    # Ставимо стан для користувача
+    user_states[update.effective_user.id] = "waiting_for_delete_date"
+
+    await update.message.reply_text(
+        "Оберіть дату, яку хочете видалити (цілком або окремих проповідників):",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True),
+    )
 
 
 
@@ -273,6 +295,161 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     print(f"Помилка: {context.error}")
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id in user_states:
+        state = user_states[user_id]
+
+        # ---------------------------------------------------------------------
+        #            СЦЕНАРІЙ ДОДАВАННЯ (ВЖЕ БУВ У ВАШОМУ КОДІ)
+        # ---------------------------------------------------------------------
+        if state == "waiting_for_date":
+            selected_date = update.message.text.strip()
+            user_states[user_id] = {
+                "state": "waiting_for_preacher",
+                "date": selected_date
+            }
+            keyboard = [[KeyboardButton(name)] for name in PREACHERS]
+            await update.message.reply_text(
+                "Оберіть проповідника:",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard, one_time_keyboard=True, resize_keyboard=True
+                ),
+            )
+
+        elif isinstance(state, dict) and state.get("state") == "waiting_for_preacher":
+            preacher = update.message.text.strip()
+            date = state["date"]
+
+            # Зберігаємо запис у базі
+            new_entry = {date: preacher}
+            save_schedule(new_entry)
+
+            schedule = load_schedule()
+            propovidnyky = ", ".join(schedule[date])
+            await update.message.reply_text(
+                f"Проповідь на {date} збережено. Проповідники: {propovidnyky}"
+            )
+
+            # Очищаємо стан користувача
+            del user_states[user_id]
+
+        # ---------------------------------------------------------------------
+        #            СЦЕНАРІЙ ВИДАЛЕННЯ
+        # ---------------------------------------------------------------------
+        elif state == "waiting_for_delete_date":
+            # Користувач обрав дату для видалення
+            chosen_date = update.message.text.strip()
+
+            schedule = load_schedule()
+            if chosen_date not in schedule:
+                await update.message.reply_text("Такої дати в розкладі немає. Спробуйте ще раз.")
+                return
+
+            preachers = schedule[chosen_date]
+            count = len(preachers)
+
+            # Записуємо все необхідне в стан
+            user_states[user_id] = {
+                "state": "waiting_for_delete_decision",
+                "date": chosen_date,
+                "preachers": preachers
+            }
+
+            if count == 1:
+                # Якщо лише один проповідник
+                keyboard = [
+                    [KeyboardButton("Видалити дату повністю")],
+                    [KeyboardButton(f"Видалити проповідника: {preachers[0]}")],
+                ]
+                await update.message.reply_text(
+                    f"Для дати {chosen_date} є лише один проповідник: {preachers[0]}.\n"
+                    "Видалити дату цілком чи тільки проповідника?",
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboard, one_time_keyboard=True, resize_keyboard=True
+                    ),
+                )
+            else:
+                # Якщо проповідників декілька
+                keyboard = [
+                    [KeyboardButton("Видалити дату повністю")],
+                    [KeyboardButton("Видалити одного проповідника")],
+                ]
+                await update.message.reply_text(
+                    f"Для дати {chosen_date} є {count} проповідників: {', '.join(preachers)}.\n"
+                    "Видалити дату цілком або лише одного?",
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboard, one_time_keyboard=True, resize_keyboard=True
+                    ),
+                )
+
+        elif (
+            isinstance(state, dict) and
+            state.get("state") == "waiting_for_delete_decision"
+        ):
+            chosen_date = state["date"]
+            preachers = state["preachers"]
+            decision = update.message.text.strip().lower()
+
+            if "повністю" in decision:
+                # Користувач обрав видалити усю дату
+                success = delete_schedule_date(chosen_date)
+                if success:
+                    await update.message.reply_text(
+                        f"Дату {chosen_date} видалено повністю."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"Не вдалося видалити дату {chosen_date} (вона могла бути вже видалена)."
+                    )
+                del user_states[user_id]
+
+            elif "одного" in decision:
+                # Показуємо список проповідників для вибору
+                user_states[user_id]["state"] = "waiting_for_delete_preacher"
+                keyboard = [[KeyboardButton(p)] for p in preachers]
+                await update.message.reply_text(
+                    "Оберіть проповідника, якого хочете видалити:",
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboard, one_time_keyboard=True, resize_keyboard=True
+                    ),
+                )
+            elif "проповідника:" in decision:
+                # Це варіант, якщо один проповідник і кнопка мала вигляд "Видалити проповідника: Іванов І."
+                preacher_to_delete = decision.split(":", 1)[1].strip()
+                success = delete_schedule_preacher(chosen_date, preacher_to_delete)
+                if success:
+                    await update.message.reply_text(
+                        f"Проповідника '{preacher_to_delete}' з дати {chosen_date} видалено."
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"Не вдалося видалити проповідника '{preacher_to_delete}'."
+                    )
+                del user_states[user_id]
+
+            else:
+                # Невідомий варіант відповіді
+                await update.message.reply_text("Невідома дія. Спробуйте ще раз /delete.")
+                del user_states[user_id]
+
+        elif (
+            isinstance(state, dict) and
+            state.get("state") == "waiting_for_delete_preacher"
+        ):
+            chosen_date = state["date"]
+            chosen_preacher = update.message.text.strip()
+            success = delete_schedule_preacher(chosen_date, chosen_preacher)
+            if success:
+                await update.message.reply_text(
+                    f"Проповідника '{chosen_preacher}' з дати {chosen_date} видалено."
+                )
+            else:
+                await update.message.reply_text(
+                    f"Не вдалося видалити '{chosen_preacher}'. Можливо, немає такого проповідника."
+                )
+            del user_states[user_id]
 
 
 
@@ -311,6 +488,8 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("add", add_command))
     application.add_handler(CommandHandler("show", end_command))
+    application.add_handler(CommandHandler("delete", delete_command))
+
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
     

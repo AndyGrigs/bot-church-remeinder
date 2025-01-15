@@ -559,20 +559,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def remind(context: ContextTypes.DEFAULT_TYPE):
     try:
         schedule = load_schedule()
+        
         current_date = datetime.now().date()
-
         for date, preachers in schedule.items():
             schedule_date = datetime.strptime(date, "%d.%m.%Y")
-            difference = (schedule_date - current_date).days
+            # difference = (schedule_date - current_date).days
+            difference = (schedule_date.date() - current_date).days
 
             if difference == 2:
                 preachers_list = ", ".join(preachers)
                 message = (
                     f"Нагадування!\n\n"
-                    f"На зібранні{date}:\n"
-                    f"Проповідують:{preachers_list}"
+                    f"На зібранні {date}:\n"
+                    f"Проповідують: {preachers_list}"
                 )
-                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+            await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
 
     except Exception as e:
         print(f"Помилка у функції remind: {e}")
@@ -595,11 +596,9 @@ def main():
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
     
-    application.job_queue.run_daily(
-        remind,
-        time=time(hour=9, minute=0),
-        days=(0,1,2,3,4,5,6)  
-    )
+    application.job_queue.run_repeating(remind, interval=3*24*60*60, first=3*24*60*60, )
+    # application.job_queue.run_repeating(remind, interval=10 )
+    
     application.add_handler(CommandHandler("export", export_table_command))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

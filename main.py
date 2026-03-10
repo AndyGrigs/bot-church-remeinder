@@ -35,6 +35,7 @@ user_states = {}
 client = MongoClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
 db = client["church_schedule"]  # Назва бази даних
 collection = db["schedules"]  # Колекція для розкладів
+events_collection = db["events"]  # Колекція для церковних подій
 
 # Функція для встановлення кольору фону (заливки) клітинки:
 def set_cell_bg_color(cell, color_hex: str):
@@ -61,6 +62,26 @@ def load_schedule():
     except Exception as e:
         print(f"Помилка при завантаженні розкладу: {e}")
         return {}
+
+def load_events():
+    """Завантаження подій з MongoDB."""
+    try:
+        return list(events_collection.find({}, {"_id": 0, "date": 1, "title": 1}))
+    except Exception as e:
+        print(f"Помилка при завантаженні подій: {e}")
+        return []
+
+def save_event(date: str, title: str):
+    """Збереження події в MongoDB."""
+    try:
+        events_collection.insert_one({"date": date, "title": title})
+    except Exception as e:
+        print(f"Помилка при збереженні події: {e}")
+
+def delete_event(date: str, title: str) -> bool:
+    """Видалення події з MongoDB."""
+    result = events_collection.delete_one({"date": date, "title": title})
+    return result.deleted_count > 0
 
 def save_schedule(new_entry):
     """Додавання нового запису до MongoDB."""
@@ -150,8 +171,7 @@ async def export_table_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "Босько П.", "Біленко Ю.", "Мосійчук В.", "Мироненко І.",
         "Барановський М.", "Пономарьов А.", "Замуруєв В.", "Григоров А.",
         "Савостін В.", "Козак Є.", "Кулик Є.", "Ковальчук Ю.",
-        "Савостін І.", "Суржа П.", "Кітченко Я.", "Волос В.",
-        "Сардак Р."
+        "Савостін І.", "Суржа П.", "Волос В"
     ]
 
     # -------------------------------------------------
@@ -252,6 +272,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /show - Показати розклад проповідей
 /export - Експортувати розклад в файл
 /delete - Видалити проповідь
+/add_event - Додати церковну подію
+/show_events - Показати заплановані події
+/delete_event - Видалити подію
 /help - Показати список доступних команд
 """
     await update.message.reply_text(commands)
@@ -556,24 +579,120 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             del user_states[user_id]
 
+        # ---------------------------------------------------------------------
+        #            СЦЕНАРІЙ ДОДАВАННЯ ПОДІЇ
+        # ---------------------------------------------------------------------
+        elif state == "waiting_for_event_date":
+            date_text = update.message.text.strip()
+            try:
+                datetime.strptime(date_text, "%d.%m.%Y")
+            except ValueError:
+                await update.message.reply_text(
+                    "Невірний формат дати. Введіть у форматі ДД.ММ.РРРР (наприклад: 25.03.2026):"
+                )
+                return
+            user_states[user_id] = {"state": "waiting_for_event_title", "date": date_text}
+            await update.message.reply_text("Введіть назву події:")
+
+        elif isinstance(state, dict) and state.get("state") == "waiting_for_event_title":
+            title = update.message.text.strip()
+            date = state["date"]
+            save_event(date, title)
+            await update.message.reply_text(f"Подію '{title}' на {date} збережено.")
+            del user_states[user_id]
+
+        # ---------------------------------------------------------------------
+        #            СЦЕНАРІЙ ВИДАЛЕННЯ ПОДІЇ
+        # ---------------------------------------------------------------------
+        elif isinstance(state, dict) and state.get("state") == "waiting_for_delete_event":
+            chosen = update.message.text.strip()
+            events = state["events"]
+            matched = next((e for e in events if f"{e['date']} — {e['title']}" == chosen), None)
+            if not matched:
+                await update.message.reply_text("Подію не знайдено. Спробуйте ще раз /delete_event.")
+                del user_states[user_id]
+                return
+            success = delete_event(matched["date"], matched["title"])
+            if success:
+                await update.message.reply_text(f"Подію '{matched['title']}' на {matched['date']} видалено.")
+            else:
+                await update.message.reply_text("Не вдалося видалити подію.")
+            del user_states[user_id]
+
+async def add_event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_states[update.effective_user.id] = "waiting_for_event_date"
+    await update.message.reply_text(
+        "Введіть дату події у форматі ДД.ММ.РРРР (наприклад: 25.03.2026):"
+    )
+
+async def show_events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    events = load_events()
+    now = datetime.now().date()
+    upcoming = sorted(
+        [e for e in events if datetime.strptime(e["date"], "%d.%m.%Y").date() >= now],
+        key=lambda e: datetime.strptime(e["date"], "%d.%m.%Y")
+    )
+    if not upcoming:
+        await update.message.reply_text("Немає запланованих подій.")
+        return
+    result = "*Заплановані події:*\n\n"
+    for event in upcoming:
+        dt = datetime.strptime(event["date"], "%d.%m.%Y")
+        day_of_week = SHORT_DAYS_OF_WEEK[dt.weekday()]
+        result += f"📅 {event['date']} ({day_of_week}) — {event['title']}\n"
+    await update.message.reply_text(result, parse_mode="Markdown")
+
+async def delete_event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    events = load_events()
+    now = datetime.now().date()
+    upcoming = sorted(
+        [e for e in events if datetime.strptime(e["date"], "%d.%m.%Y").date() >= now],
+        key=lambda e: datetime.strptime(e["date"], "%d.%m.%Y")
+    )
+    if not upcoming:
+        await update.message.reply_text("Немає запланованих подій для видалення.")
+        return
+    keyboard = [[KeyboardButton(f"{e['date']} — {e['title']}")] for e in upcoming]
+    user_states[update.effective_user.id] = {
+        "state": "waiting_for_delete_event",
+        "events": upcoming
+    }
+    await update.message.reply_text(
+        "Оберіть подію для видалення:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+    )
+
 async def remind(context: ContextTypes.DEFAULT_TYPE):
     try:
-        schedule = load_schedule()
-        
         current_date = datetime.now().date()
-        for date, preachers in schedule.items():
-            schedule_date = datetime.strptime(date, "%d.%m.%Y")
-            # difference = (schedule_date - current_date).days
-            difference = (schedule_date.date() - current_date).days
 
-            if difference == 2:
+        # Нагадування про проповіді
+        schedule = load_schedule()
+        for date, preachers in schedule.items():
+            schedule_date = datetime.strptime(date, "%d.%m.%Y").date()
+            if (schedule_date - current_date).days == 2:
                 preachers_list = ", ".join(preachers)
-                message = (
-                    f"Нагадування!\n\n"
-                    f"На зібранні {date}:\n"
-                    f"Проповідують: {preachers_list}"
+                await context.bot.send_message(
+                    chat_id=GROUP_CHAT_ID,
+                    text=(
+                        f"Нагадування!\n\n"
+                        f"На зібранні {date}:\n"
+                        f"Проповідують: {preachers_list}"
+                    )
                 )
-            await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message)
+
+        # Нагадування про церковні події
+        events = load_events()
+        for event in events:
+            event_date = datetime.strptime(event["date"], "%d.%m.%Y").date()
+            if (event_date - current_date).days == 2:
+                await context.bot.send_message(
+                    chat_id=GROUP_CHAT_ID,
+                    text=(
+                        f"Нагадування про подію!\n\n"
+                        f"📅 {event['date']}: {event['title']}"
+                    )
+                )
 
     except Exception as e:
         print(f"Помилка у функції remind: {e}")
@@ -596,10 +715,13 @@ def main():
     application.add_handler(CommandHandler("get_chat_id", get_chat_id))
     application.add_error_handler(error_handler)
     
-    application.job_queue.run_repeating(remind, interval=3*24*60*60, first=3*24*60*60, )
+    application.job_queue.run_repeating(remind, interval=24*60*60, first=10)
     # application.job_queue.run_repeating(remind, interval=10 )
     
     application.add_handler(CommandHandler("export", export_table_command))
+    application.add_handler(CommandHandler("add_event", add_event_command))
+    application.add_handler(CommandHandler("show_events", show_events_command))
+    application.add_handler(CommandHandler("delete_event", delete_event_command))
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))

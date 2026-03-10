@@ -1,0 +1,12 @@
+app = "church-reminder-bot"
+primary_region = "waw"
+
+[build]
+
+[env]
+  # Змінні середовища задаються через: fly secrets set BOT_TOKEN=... GROUP_CHAT_ID=... MONGO_URI=...
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

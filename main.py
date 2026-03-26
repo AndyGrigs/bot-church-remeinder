@@ -13,17 +13,24 @@ from docx.shared import Inches
 # Завантаження змінних із .env файлу
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
+ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')   # група де вводять дані
+GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')   # група куди йдуть нагадування
 
-if not BOT_TOKEN or not GROUP_CHAT_ID:
-    print("Помилка: BOT_TOKEN або GROUP_CHAT_ID не встановлено. Перевірте файл .env.")
+if not BOT_TOKEN or not ADMIN_CHAT_ID or not GROUP_CHAT_ID:
+    print("Помилка: BOT_TOKEN, ADMIN_CHAT_ID або GROUP_CHAT_ID не встановлено. Перевірте файл .env.")
     exit(1)
 
 try:
-    GROUP_CHAT_ID = int(GROUP_CHAT_ID)  # Перетворюємо на ціле число
+    ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
+    GROUP_CHAT_ID = int(GROUP_CHAT_ID)
 except ValueError:
-    print("Помилка: GROUP_CHAT_ID повинен бути цілим числом.")
+    print("Помилка: ADMIN_CHAT_ID і GROUP_CHAT_ID повинні бути цілими числами.")
     exit(1)
+
+
+def is_admin_chat(update: Update) -> bool:
+    """Перевіряє, що команда надійшла з адмін-групи."""
+    return update.effective_chat.id == ADMIN_CHAT_ID
 
 user_states = {}
 
@@ -105,13 +112,14 @@ def save_schedule(new_entry):
 
 async def export_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Команда /export_table [current|next]
+    Команда /export [current|next]
     Створює Word-документ з таблицею проповідників тільки за обраний місяць:
     - /export_table current => поточний місяць
     - /export_table next    => наступний місяць
     Якщо не передано аргумент, використовується поточний місяць.
     """
-    # Зчитуємо аргументи: /export_table current або /export_table next
+    if not is_admin_chat(update):
+        return
     user_input = update.message.text.strip().split()
     chosen_option = None
     if len(user_input) > 1:
@@ -264,9 +272,13 @@ PREACHERS = [
 SHORT_DAYS_OF_WEEK = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await context.bot.send_message(chat_id=GROUP_CHAT_ID, text="Привіт! Я готовий працювати в групі.")
+    if not is_admin_chat(update):
+        return
+    await update.message.reply_text("Привіт! Я готовий працювати. Використайте /help.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_chat(update):
+        return
     commands = """
 Доступні команди:
 /start - Почати спілкування з ботом
@@ -306,7 +318,8 @@ def get_thursday_sunday_dates(year: int, month: int):
     return selected_dates
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Визначаємо поточний рік і місяць
+    if not is_admin_chat(update):
+        return
     now = datetime.now()
     current_year = now.year
     current_month = now.month
@@ -376,7 +389,9 @@ def delete_schedule_preacher(date_str: str, preacher: str) -> bool:
     return True
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    schedule = load_schedule()  # отримуєте актуальний розклад із БД
+    if not is_admin_chat(update):
+        return
+    schedule = load_schedule()
     if not schedule:
         await update.message.reply_text("Немає жодних дат у розкладі для видалення.")
         return
@@ -396,6 +411,8 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_chat(update):
+        return
     schedule = load_schedule()
     if not schedule:
         await update.message.reply_text("Розклад порожній.")
@@ -612,12 +629,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del user_states[user_id]
 
 async def add_event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_chat(update):
+        return
     user_states[update.effective_user.id] = "waiting_for_event_date"
     await update.message.reply_text(
         "Введіть дату події у форматі ДД.ММ.РРРР (наприклад: 25.03.2026):"
     )
 
 async def show_events_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_chat(update):
+        return
     events = load_events()
     now = datetime.now().date()
     upcoming = sorted(
@@ -635,6 +656,8 @@ async def show_events_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(result, parse_mode="Markdown")
 
 async def delete_event_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin_chat(update):
+        return
     events = load_events()
     now = datetime.now().date()
     upcoming = sorted(

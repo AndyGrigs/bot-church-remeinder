@@ -15,6 +15,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')   # група де вводять дані
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')   # група куди йдуть нагадування
+REMINDER_THREAD_ID = os.getenv('REMINDER_THREAD_ID')  # тема (підгрупа) для нагадувань
 
 if not BOT_TOKEN or not ADMIN_CHAT_ID or not GROUP_CHAT_ID:
     print("Помилка: BOT_TOKEN, ADMIN_CHAT_ID або GROUP_CHAT_ID не встановлено. Перевірте файл .env.")
@@ -23,6 +24,7 @@ if not BOT_TOKEN or not ADMIN_CHAT_ID or not GROUP_CHAT_ID:
 try:
     ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
     GROUP_CHAT_ID = int(GROUP_CHAT_ID)
+    REMINDER_THREAD_ID = int(REMINDER_THREAD_ID) if REMINDER_THREAD_ID else None
 except ValueError:
     print("Помилка: ADMIN_CHAT_ID і GROUP_CHAT_ID повинні бути цілими числами.")
     exit(1)
@@ -427,7 +429,8 @@ async def end_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    await update.message.reply_text(f"Chat ID цієї групи: {chat_id}")
+    thread_id = update.message.message_thread_id
+    await update.message.reply_text(f"Chat ID: {chat_id}\nThread ID: {thread_id}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     print(f"Помилка: {context.error}")
@@ -689,6 +692,7 @@ async def remind(context: ContextTypes.DEFAULT_TYPE):
                 preachers_list = ", ".join(preachers)
                 await context.bot.send_message(
                     chat_id=GROUP_CHAT_ID,
+                    message_thread_id=REMINDER_THREAD_ID,
                     text=(
                         f"Нагадування!\n\n"
                         f"На зібранні {date}:\n"
@@ -703,6 +707,7 @@ async def remind(context: ContextTypes.DEFAULT_TYPE):
             if (event_date - current_date).days == 2:
                 await context.bot.send_message(
                     chat_id=GROUP_CHAT_ID,
+                    message_thread_id=REMINDER_THREAD_ID,
                     text=(
                         f"Нагадування про подію!\n\n"
                         f"📅 {event['date']}: {event['title']}"

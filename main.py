@@ -8,16 +8,14 @@ import docx  # python-docx
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches
-from pymongo import MongoClient
 
 
 # Завантаження змінних із .env файлу
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
-MONGO_URI = os.getenv('MONGO_URI') 
 
-if not BOT_TOKEN or not GROUP_CHAT_ID or not MONGO_URI:
+if not BOT_TOKEN or not GROUP_CHAT_ID:
     print("Помилка: BOT_TOKEN або GROUP_CHAT_ID не встановлено. Перевірте файл .env.")
     exit(1)
 
@@ -29,13 +27,8 @@ except ValueError:
 
 user_states = {}
 
-
-# client = MongoClient(MONGO_URI, ssl=True, ssl_cert_reqs=ssl.CERT_NONE)
-# client = MongoClient(MONGO_URI, ssl_cert_reqs=ssl.CERT_NONE)
-client = MongoClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
-db = client["church_schedule"]  # Назва бази даних
-collection = db["schedules"]  # Колекція для розкладів
-events_collection = db["events"]  # Колекція для церковних подій
+SCHEDULE_FILE = "schedule.txt"
+EVENTS_FILE = "events.txt"
 
 # Функція для встановлення кольору фону (заливки) клітинки:
 def set_cell_bg_color(cell, color_hex: str):
@@ -50,56 +43,65 @@ def set_cell_bg_color(cell, color_hex: str):
     tc_pr.append(shd)
 
 def load_schedule():
-    """Завантаження розкладу з MongoDB."""
-    try:
-        documents = collection.find({})
-        schedule = {}
-        for doc in documents:
-            date = doc["date"]
-            preachers = doc["preachers"]
-            schedule[date] = preachers
+    """Завантаження розкладу з txt файлу."""
+    schedule = {}
+    if not os.path.exists(SCHEDULE_FILE):
         return schedule
-    except Exception as e:
-        print(f"Помилка при завантаженні розкладу: {e}")
-        return {}
+    with open(SCHEDULE_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            date, preachers_str = line.split("|", 1)
+            schedule[date] = preachers_str.split(",")
+    return schedule
+
+def save_schedule_to_file(schedule: dict):
+    """Записує весь розклад у txt файл."""
+    with open(SCHEDULE_FILE, "w", encoding="utf-8") as f:
+        for date, preachers in schedule.items():
+            f.write(f"{date}|{','.join(preachers)}\n")
 
 def load_events():
-    """Завантаження подій з MongoDB."""
-    try:
-        return list(events_collection.find({}, {"_id": 0, "date": 1, "title": 1}))
-    except Exception as e:
-        print(f"Помилка при завантаженні подій: {e}")
-        return []
+    """Завантаження подій з txt файлу."""
+    events = []
+    if not os.path.exists(EVENTS_FILE):
+        return events
+    with open(EVENTS_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            date, title = line.split("|", 1)
+            events.append({"date": date, "title": title})
+    return events
 
 def save_event(date: str, title: str):
-    """Збереження події в MongoDB."""
-    try:
-        events_collection.insert_one({"date": date, "title": title})
-    except Exception as e:
-        print(f"Помилка при збереженні події: {e}")
+    """Збереження події в txt файл."""
+    with open(EVENTS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{date}|{title}\n")
 
 def delete_event(date: str, title: str) -> bool:
-    """Видалення події з MongoDB."""
-    result = events_collection.delete_one({"date": date, "title": title})
-    return result.deleted_count > 0
+    """Видалення події з txt файлу."""
+    events = load_events()
+    new_events = [e for e in events if not (e["date"] == date and e["title"] == title)]
+    if len(new_events) == len(events):
+        return False
+    with open(EVENTS_FILE, "w", encoding="utf-8") as f:
+        for e in new_events:
+            f.write(f"{e['date']}|{e['title']}\n")
+    return True
 
 def save_schedule(new_entry):
-    """Додавання нового запису до MongoDB."""
-    try:
-        for date, preacher in new_entry.items():
-            existing_entry = collection.find_one({"date": date})
-            if existing_entry:
-                # Додаємо нового проповідника, якщо його ще немає
-                if preacher not in existing_entry["preachers"]:
-                    collection.update_one(
-                        {"date": date},
-                        {"$push": {"preachers": preacher}}
-                    )
-            else:
-                # Створюємо новий запис
-                collection.insert_one({"date": date, "preachers": [preacher]})
-    except Exception as e:
-        print(f"Помилка при збереженні розкладу: {e}")
+    """Додавання нового запису до txt файлу."""
+    schedule = load_schedule()
+    for date, preacher in new_entry.items():
+        if date in schedule:
+            if preacher not in schedule[date]:
+                schedule[date].append(preacher)
+        else:
+            schedule[date] = [preacher]
+    save_schedule_to_file(schedule)
 
 async def export_table_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -349,38 +351,28 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 def delete_schedule_date(date_str: str) -> bool:
-    """
-    Видаляє цілу дату (з усіма проповідниками) з колекції.
-    Повертає True, якщо дата була знайдена і видалена; False, якщо дати не було.
-    """
-    result = collection.delete_one({"date": date_str})
-    return result.deleted_count > 0
+    """Видаляє цілу дату (з усіма проповідниками) з txt файлу."""
+    schedule = load_schedule()
+    if date_str not in schedule:
+        return False
+    del schedule[date_str]
+    save_schedule_to_file(schedule)
+    return True
 
 def delete_schedule_preacher(date_str: str, preacher: str) -> bool:
     """
-    Видаляє вказаного проповідника з масиву preachers на конкретну дату.
-    Якщо після видалення у дати не лишається проповідників — видаляє увесь запис дати.
-    Повертає True, якщо щось видалено; False, якщо даної дати або проповідника не знайдено.
+    Видаляє вказаного проповідника з конкретної дати.
+    Якщо після видалення проповідників не лишається — видаляє дату.
     """
-    doc = collection.find_one({"date": date_str})
-    if not doc:
-        return False  # Немає такої дати
-
-    if preacher not in doc["preachers"]:
-        return False  # Проповідника в списку немає
-
-    # Видаляємо проповідника зі списку
-    collection.update_one(
-        {"date": date_str},
-        {"$pull": {"preachers": preacher}}
-    )
-
-    # Перевіряємо, чи залишилися проповідники
-    updated_doc = collection.find_one({"date": date_str})
-    if updated_doc and not updated_doc["preachers"]:
-        # Якщо проповідників більше не лишилося — видаляємо дату
-        collection.delete_one({"_id": updated_doc["_id"]})
-
+    schedule = load_schedule()
+    if date_str not in schedule:
+        return False
+    if preacher not in schedule[date_str]:
+        return False
+    schedule[date_str].remove(preacher)
+    if not schedule[date_str]:
+        del schedule[date_str]
+    save_schedule_to_file(schedule)
     return True
 
 async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
